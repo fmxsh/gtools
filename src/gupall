@@ -1,0 +1,46 @@
+#!/bin/bash
+# Update all git repositories from current directory down
+
+set -e
+
+COMMIT_MSG="$1"
+
+if [ -z "$COMMIT_MSG" ]; then
+	echo "Usage: $0 \"commit message\""
+	exit 1
+fi
+
+GUP_CMD="$(realpath "$(dirname "$0")/gup")"
+
+# Read all .git dirs into an array
+mapfile -t git_dirs < <(find . -type d -name .git)
+
+for gitdir in "${git_dirs[@]}"; do
+	repo_dir="$(dirname "$gitdir")"
+
+	(
+		cd "$repo_dir" || exit 1
+
+		# Skip if repo has unpushed commits
+		if [ -n "$(git log @{u}.. 2>/dev/null)" ]; then
+			echo "❌ Skipping $repo_dir: has unpushed commits"
+			exit 0
+		fi
+
+		# Skip if working tree is clean
+		if [ -z "$(git status --porcelain)" ]; then
+			exit 0
+		fi
+
+		echo "📂 Repo with changes: $repo_dir"
+		git status --short
+
+		# ✅ Prompt now works
+		read -rp "👉 Run gup here? (y/N): " confirm
+		if [[ "$confirm" =~ ^[Yy]$ ]]; then
+			"$GUP_CMD" "$COMMIT_MSG"
+		else
+			echo "⏭️ Skipped $repo_dir"
+		fi
+	)
+done
