@@ -1,0 +1,120 @@
+#!/bin/bash
+
+set -e
+
+CONFIG_FILE="$HOME/.config/gh/access-tokens"
+
+# Ensure a GitHub username was provided
+if [ -z "$1" ]; then
+	echo "Usage: $0 <github-username> [--private]"
+	exit 1
+fi
+
+GITHUB_USER="$1"
+IS_PRIVATE=false
+
+# Optional --private flag
+if [ "${2:-}" = "--private" ]; then
+	IS_PRIVATE=true
+fi
+
+# Check token config
+if ! grep -q "^$GITHUB_USER=" "$CONFIG_FILE"; then
+	echo "Error: No token found for user '$GITHUB_USER' in $CONFIG_FILE"
+	exit 1
+fi
+
+# Load token
+GITHUB_TOKEN=$(grep "^$GITHUB_USER=" "$CONFIG_FILE" | cut -d= -f2-)
+
+# Determine SSH host alias
+case "$GITHUB_USER" in
+fmxsh)
+
+	git init
+	git config user.name "fmxsh"
+	git config user.email "154448936+fmxsh@users.noreply.github.com" #"fred@fmx.sh"
+	SSH_HOST="github.com-fmxsh"
+	;;
+mtkld)
+
+	git init
+	git config user.name "mtkld"
+	git config user.email "194388525+mtkld@users.noreply.github.com" #"fredrik@matkalkyl.dev"
+	SSH_HOST="github.com-mtkld"
+	;;
+
+*)
+	echo "Unknown GitHub user: $GITHUB_USER"
+	exit 1
+	;;
+esac
+
+# Prompt for repository info
+read -rp "Enter the repository name: " REPO_NAME
+[ -z "$REPO_NAME" ] && {
+	echo "Repository name cannot be empty."
+	exit 1
+}
+
+read -rp "Enter a description for the repository: " REPO_DESC
+read -rp "Enter repository topics (comma-separated): " REPO_TOPICS
+
+# Check if already exists
+EXISTS=$(curl -s -o /dev/null -w "%{http_code}" \
+	-H "Authorization: token $GITHUB_TOKEN" \
+	"https://api.github.com/repos/$GITHUB_USER/$REPO_NAME")
+
+if [ "$EXISTS" = "200" ]; then
+	echo "Error: Repository already exists on GitHub."
+	exit 1
+fi
+
+## Create the repo
+#RESPONSE=$(
+#	curl -s -X POST \
+#		-H "Authorization: token $GITHUB_TOKEN" \
+#		-H "Accept: application/vnd.github+json" \
+#		https://api.github.com/user/repos \
+#		-d @- <<EOF
+#{
+#  "name": "$REPO_NAME",
+#  "description": "$REPO_DESC",
+#  "private": false
+#}
+#EOF
+#)
+RESPONSE=$(
+	curl -s -X POST \
+		-H "Authorization: token $GITHUB_TOKEN" \
+		-H "Accept: application/vnd.github+json" \
+		https://api.github.com/user/repos \
+		-d @- <<EOF
+{
+  "name": "$REPO_NAME",
+  "description": "$REPO_DESC",
+  "private": $IS_PRIVATE
+}
+EOF
+)
+
+echo "✅ Repository created: https://github.com/$GITHUB_USER/$REPO_NAME"
+
+# Add topics if provided
+if [ -n "$REPO_TOPICS" ]; then
+	curl -s -X PUT \
+		-H "Authorization: token $GITHUB_TOKEN" \
+		-H "Accept: application/vnd.github+json" \
+		"https://api.github.com/repos/$GITHUB_USER/$REPO_NAME/topics" \
+		-d "{\"names\": [$(echo $REPO_TOPICS | sed 's/,/","/g' | sed 's/^/"/;s/$/"/')]}" >/dev/null
+	echo "📌 Topics added."
+fi
+
+# Initialize local repo and push
+git remote add origin "git@$SSH_HOST:$GITHUB_USER/$REPO_NAME.git"
+git add .
+git commit -m "Initial commit"
+git branch -M master
+git push -u origin master
+
+echo "🚀 Repo pushed via SSH as $GITHUB_USER ($SSH_HOST)"

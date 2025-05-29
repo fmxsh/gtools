@@ -4,19 +4,32 @@ set -e
 
 CONFIG_FILE="$HOME/.config/gh/access-tokens"
 
+# ANSI colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
 # Ensure a GitHub username was provided
 if [ -z "$1" ]; then
-	echo "Usage: $0 <github-username> [--private]"
+	echo "Usage: $0 <github-username> [--private] [-z]"
 	exit 1
 fi
 
 GITHUB_USER="$1"
 IS_PRIVATE=false
+USE_DEFAULTS=false
 
-# Optional --private flag
-if [ "${2:-}" = "--private" ]; then
-	IS_PRIVATE=true
-fi
+# Parse optional flags
+for arg in "$@"; do
+	case "$arg" in
+	--private)
+		IS_PRIVATE=true
+		;;
+	-z)
+		USE_DEFAULTS=true
+		;;
+	esac
+done
 
 # Check token config
 if ! grep -q "^$GITHUB_USER=" "$CONFIG_FILE"; then
@@ -27,38 +40,55 @@ fi
 # Load token
 GITHUB_TOKEN=$(grep "^$GITHUB_USER=" "$CONFIG_FILE" | cut -d= -f2-)
 
-# Determine SSH host alias
+# Check for existing .git directory
+if [ -d ".git" ]; then
+	echo -e "${RED}Warning: .git directory already exists in this folder.${NC}"
+	read -rp "Do you want to remove and reinitialize it? [y/N] " remove_git
+	if [[ "$remove_git" =~ ^[Yy]$ ]]; then
+		rm -rf .git
+		echo -e "${GREEN}Removed existing .git directory.${NC}"
+	else
+		echo "Aborted due to existing Git directory."
+		exit 1
+	fi
+fi
+
+# Determine SSH host alias and Git identity
 case "$GITHUB_USER" in
 fmxsh)
-
 	git init
 	git config user.name "fmxsh"
-	git config user.email "154448936+fmxsh@users.noreply.github.com" #"fred@fmx.sh"
+	git config user.email "154448936+fmxsh@users.noreply.github.com"
 	SSH_HOST="github.com-fmxsh"
 	;;
 mtkld)
-
 	git init
 	git config user.name "mtkld"
-	git config user.email "194388525+mtkld@users.noreply.github.com" #"fredrik@matkalkyl.dev"
+	git config user.email "194388525+mtkld@users.noreply.github.com"
 	SSH_HOST="github.com-mtkld"
 	;;
-
 *)
 	echo "Unknown GitHub user: $GITHUB_USER"
 	exit 1
 	;;
 esac
 
-# Prompt for repository info
-read -rp "Enter the repository name: " REPO_NAME
-[ -z "$REPO_NAME" ] && {
-	echo "Repository name cannot be empty."
-	exit 1
-}
+# Default values (used as prefill)
+default_repo_name=$(basename "$PWD")
+default_repo_desc=""
+default_repo_topics=""
 
-read -rp "Enter a description for the repository: " REPO_DESC
-read -rp "Enter repository topics (comma-separated): " REPO_TOPICS
+# Prompt for input (with defaults prefilled)
+read -rp "Enter the repository name [$default_repo_name]: " REPO_NAME
+REPO_NAME="${REPO_NAME:-$default_repo_name}"
+
+if [ "$USE_DEFAULTS" = true ]; then
+	REPO_DESC=""
+	REPO_TOPICS=""
+else
+	read -rp "Enter a description for the repository: " -e -i "$default_repo_desc" REPO_DESC
+	read -rp "Enter repository topics (comma-separated): " -e -i "$default_repo_topics" REPO_TOPICS
+fi
 
 # Check if already exists
 EXISTS=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -70,20 +100,7 @@ if [ "$EXISTS" = "200" ]; then
 	exit 1
 fi
 
-## Create the repo
-#RESPONSE=$(
-#	curl -s -X POST \
-#		-H "Authorization: token $GITHUB_TOKEN" \
-#		-H "Accept: application/vnd.github+json" \
-#		https://api.github.com/user/repos \
-#		-d @- <<EOF
-#{
-#  "name": "$REPO_NAME",
-#  "description": "$REPO_DESC",
-#  "private": false
-#}
-#EOF
-#)
+# Create the repository
 RESPONSE=$(
 	curl -s -X POST \
 		-H "Authorization: token $GITHUB_TOKEN" \
@@ -98,7 +115,7 @@ RESPONSE=$(
 EOF
 )
 
-echo "✅ Repository created: https://github.com/$GITHUB_USER/$REPO_NAME"
+echo -e "${GREEN}✅ Repository created: https://github.com/$GITHUB_USER/$REPO_NAME${NC}"
 
 # Add topics if provided
 if [ -n "$REPO_TOPICS" ]; then
@@ -106,15 +123,15 @@ if [ -n "$REPO_TOPICS" ]; then
 		-H "Authorization: token $GITHUB_TOKEN" \
 		-H "Accept: application/vnd.github+json" \
 		"https://api.github.com/repos/$GITHUB_USER/$REPO_NAME/topics" \
-		-d "{\"names\": [$(echo $REPO_TOPICS | sed 's/,/","/g' | sed 's/^/"/;s/$/"/')]}" >/dev/null
+		-d "{\"names\": [$(echo "$REPO_TOPICS" | sed 's/,/","/g' | sed 's/^/"/;s/$/"/')]}" >/dev/null
 	echo "📌 Topics added."
 fi
 
-# Initialize local repo and push
+# Final git setup and push
 git remote add origin "git@$SSH_HOST:$GITHUB_USER/$REPO_NAME.git"
 git add .
 git commit -m "Initial commit"
 git branch -M master
 git push -u origin master
 
-echo "🚀 Repo pushed via SSH as $GITHUB_USER ($SSH_HOST)"
+echo -e "${GREEN}🚀 Repo pushed via SSH as $GITHUB_USER ($SSH_HOST)${NC}"
